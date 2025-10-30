@@ -1,0 +1,400 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Timed Lock — Protected Single File (hex)</title>
+<style>
+:root{--bg:#fbfdff;--card:#fff;--muted:#6b7280;--accent:#0b74de;--danger:#c33}
+body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;background:var(--bg);color:#0f172a}
+.wrap{max-width:920px;margin:0 auto;padding:16px}
+header{display:flex;align-items:center;justify-content:space-between;gap:8px}
+h1{font-size:1rem;margin:0}
+.tabs{display:flex;gap:8px;margin-top:14px}
+.tabBtn{flex:1;padding:10px;border-radius:10px;border:1px solid #e6e9ee;background:#fff;font-weight:700}
+.tabBtn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.card{background:var(--card);padding:12px;border-radius:12px;box-shadow:0 6px 18px rgba(12,22,39,0.04);margin-top:12px}
+label{display:block;font-weight:700;margin-top:8px}
+input[type="text"],input[type="password"],input[type="date"],input[type="time"],textarea,select{width:100%;padding:10px;margin-top:6px;border-radius:8px;border:1px solid #e6e9ee;box-sizing:border-box}
+textarea{min-height:120px;font-family:monospace;resize:vertical}
+.row{display:flex;gap:8px}
+.row>*{flex:1}
+.btn{display:inline-block;padding:10px 12px;border-radius:10px;border:0;background:var(--accent);color:#fff;font-weight:800;margin-top:12px}
+.out{white-space:pre-wrap;background:#f6f8fa;padding:10px;border-radius:8px;margin-top:12px;font-size:0.95rem}
+.hint{color:var(--muted);font-size:0.9rem;margin-top:6px}
+.small{font-size:0.85rem;color:var(--muted)}
+.modeRow{display:flex;gap:8px;margin-top:6px}
+.modeBtn{flex:1;padding:8px;border-radius:8px;border:1px solid #e6e9ee;background:#fff;text-align:center;cursor:pointer}
+.modeBtn.active{background:#eef6ff;border-color:var(--accent);color:var(--accent);font-weight:700}
+@media(min-width:720px){.tabs{max-width:560px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Timed Lock — Text & File (hex)</h1>
+    <div class="small">Protected build — do not edit script block</div>
+  </header>
+
+  <div class="tabs" role="tablist">
+    <button id="tabLock" class="tabBtn active" role="tab">🔒 Lock</button>
+    <button id="tabUnlock" class="tabBtn" role="tab">🔓 Unlock</button>
+  </div>
+
+  <div id="panelLock" class="card" role="tabpanel">
+    <label>Mode</label>
+    <div class="modeRow">
+      <div id="modeText" class="modeBtn active">Text</div>
+      <div id="modeFile" class="modeBtn">File</div>
+    </div>
+
+    <div id="textBlock">
+      <label>Secret text</label>
+      <textarea id="secret" placeholder="Paste passwords, notes, or leave empty if using File mode..."></textarea>
+    </div>
+
+    <div id="fileBlock" style="display:none">
+      <label>Choose file to encrypt</label>
+      <input id="fileInputLock" type="file" />
+      <div class="hint">Original filename and MIME will be preserved inside the encrypted envelope.</div>
+    </div>
+
+    <label>Unlock date & time (IST)</label>
+    <div class="row">
+      <input id="date" type="date"/>
+      <input id="time" type="time"/>
+    </div>
+
+    <label>Passphrase</label>
+    <input id="passLock" type="password" placeholder="Enter passphrase (keep it separate/off-device)"/>
+
+    <div class="hint">Time API fixed: Asia/Kolkata (worldtimeapi.org). Encryption: PBKDF2(pass+pageHash) + AES-GCM. Output: single JSON with hex blob.</div>
+
+    <button id="doLock" class="btn">🔒 Lock & Download JSON</button>
+    <div id="lockStatus" class="out" style="display:none"></div>
+  </div>
+
+  <div id="panelUnlock" class="card" role="tabpanel" style="display:none">
+    <label>Encrypted file (.json from Lock)</label>
+    <input id="encFile" type="file" accept=".json"/>
+
+    <label>Passphrase</label>
+    <input id="passUnlock" type="password" placeholder="Enter passphrase used at lock"/>
+
+    <button id="doUnlock" class="btn">🔓 Attempt Unlock</button>
+    <div id="unlockStatus" class="out" style="display:none"></div>
+  </div>
+
+  <div class="hint" style="margin-top:12px">The generated JSON contains only: <code>{ "data": "&lt;hex&gt;" }</code>. All metadata and payload are encrypted inside.</div>
+</div>
+
+<!-- Robust INTEGRITY GUARD: tries multiple ways to extract and verify the mainScript content -->
+<script>
+(async function robustIntegrityGuard(){
+  const EXPECTED_SCRIPT_HASH = "7694113ef94fb6d7253f0f4dc9dd8bf612a6b52280f9f15c6626f38bf0460d60"; // replaced on generation
+  const EXPECTED_PAGE_HASH = "e3a5eb16c8c6a895b93528331d38dfbb71d29cb60fd10d509a70ab8517d7495c";
+
+  function hexFromBuffer(buf){
+    return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+  }
+  async function sha256HexOfString(s){
+    const enc = new TextEncoder();
+    const d = await crypto.subtle.digest('SHA-256', enc.encode(s));
+    return hexFromBuffer(d);
+  }
+
+  // 1) Try to read mainScript element text
+  const scriptEl = document.getElementById('mainScript');
+  if(scriptEl && (scriptEl.textContent || scriptEl.innerText)){
+    try{
+      const text = scriptEl.textContent || scriptEl.innerText;
+      const hex = await sha256HexOfString(text);
+      if(hex === EXPECTED_SCRIPT_HASH){
+        const s = document.createElement('script'); s.textContent = text; document.head.appendChild(s); return;
+      } else { console.warn('mainScript hash mismatch (element).', hex); }
+    }catch(e){ console.warn('mainScript element read failed', e); }
+  }
+
+  // 2) Try fetch location.href
+  try{
+    const resp = await fetch(location.href, {cache:'no-store'});
+    if(resp && resp.ok){
+      const html = await resp.text();
+      const match = html.match(/<script\s+id\s*=\s*["']mainScript["'][^>]*>([\s\S]*?)<\/script>/i);
+      if(match && match[1]){
+        const mainText = match[1];
+        const hex = await sha256HexOfString(mainText);
+        if(hex === EXPECTED_SCRIPT_HASH){
+          const s = document.createElement('script'); s.textContent = mainText; document.head.appendChild(s); return;
+        } else { console.warn('mainScript hash mismatch (fetched).', hex); }
+      }
+      const pageHex = await sha256HexOfString(html);
+      if(pageHex === EXPECTED_PAGE_HASH){
+        const match2 = html.match(/<script\s+id\s*=\s*["']mainScript["'][^>]*>([\s\S]*?)<\/script>/i);
+        if(match2 && match2[1]){ const s=document.createElement('script'); s.textContent=match2[1]; document.head.appendChild(s); return; }
+      } else { console.warn('fetched page hash mismatch', pageHex); }
+    }
+  }catch(e){ console.warn('fetch(location.href) failed:', e); }
+
+  // 3) Fallback: hash document.outerHTML
+  try{
+    const outer = document.documentElement.outerHTML || document.documentElement.innerHTML || '';
+    if(outer){
+      const outerHex = await sha256HexOfString(outer);
+      if(outerHex === EXPECTED_PAGE_HASH){
+        const el = document.getElementById('mainScript'); const t = el ? (el.textContent||el.innerText) : null;
+        if(t){ const s=document.createElement('script'); s.textContent=t; document.head.appendChild(s); return; }
+      } else { console.warn('outerHTML hash mismatch', outerHex); }
+    }
+  }catch(e){ console.warn('outerHTML check failed', e); }
+
+  // final message
+  document.documentElement.innerHTML =
+    '<div style="font-family:system-ui;padding:20px;background:#fff5f5;color:#900">' +
+    '<h2>Security check failed — page could not be verified.</h2>' +
+    '<p>This usually happens when the file is opened in a viewer that strips script content (common with Android Downloads viewer).</p>' +
+    '<p><strong>Try one of these:</strong></p>' +
+    '<ul>' +
+    '<li>Open the file with a real browser: long-press the file → "Open with" → choose Chrome or Firefox.</li>' +
+    '<li>Upload the file to a trusted host (GitHub Pages/Gist) and open in the browser from there.</li>' +
+    '<li>Use a simple local file server (Termux or a small web server) and open http://localhost:PORT/yourfile.html.</li>' +
+    '</ul>' +
+    '<p>If you want, request a weaker build that uses a more tolerant check.</p>' +
+    '</div>';
+  throw new Error('Integrity check failed (robust guard)');
+})();
+</script>
+
+<!-- MAIN SCRIPT (do NOT edit) -->
+<script id="mainScript" type="text/plain">
+const UNLOCK_PAGE_HASH = "7ab76b138d24d70c834990ef662682163e054dd342505444f38ca8dd03c354fa";
+const WORLD_TIME_API = "https://worldtimeapi.org/api/timezone/Asia/Kolkata";
+const KDF_ITERS = 200000;
+
+/* UI tab logic */
+const tabLock = document.getElementById('tabLock'), tabUnlock = document.getElementById('tabUnlock');
+const panelLock = document.getElementById('panelLock'), panelUnlock = document.getElementById('panelUnlock');
+tabLock.addEventListener('click', ()=>{ tabLock.classList.add('active'); tabUnlock.classList.remove('active'); panelLock.style.display='block'; panelUnlock.style.display='none'; });
+tabUnlock.addEventListener('click', ()=>{ tabUnlock.classList.add('active'); tabLock.classList.remove('active'); panelLock.style.display='none'; panelUnlock.style.display='block'; });
+
+/* Mode buttons */
+const modeTextBtn = document.getElementById('modeText'), modeFileBtn = document.getElementById('modeFile');
+const textBlock = document.getElementById('textBlock'), fileBlock = document.getElementById('fileBlock');
+modeTextBtn.addEventListener('click', ()=>{ modeTextBtn.classList.add('active'); modeFileBtn.classList.remove('active'); textBlock.style.display='block'; fileBlock.style.display='none'; });
+modeFileBtn.addEventListener('click', ()=>{ modeFileBtn.classList.add('active'); modeTextBtn.classList.remove('active'); textBlock.style.display='none'; fileBlock.style.display='block'; });
+
+/* helpers: hex conversions */
+function uint8ToHex(u8){
+  return Array.from(u8).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+function hexToUint8(hex){
+  if(hex.length%2!==0) throw new Error('Invalid hex');
+  const out = new Uint8Array(hex.length/2);
+  for(let i=0;i<out.length;i++) out[i]=parseInt(hex.substr(i*2,2),16);
+  return out;
+}
+function concatUint8Arrays(...arr){ const total=arr.reduce((s,a)=>s+(a?a.length:0),0); const out=new Uint8Array(total); let off=0; for(const a of arr){ if(!a) continue; out.set(a,off); off+=a.length } return out; }
+function escapeHtml(s){ return s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+/* crypto */
+async function deriveKey(passphrase,pageHashHex,salt,iterations=KDF_ITERS){
+  const input = passphrase + pageHashHex;
+  const enc = new TextEncoder();
+  const baseKey = await crypto.subtle.importKey('raw', enc.encode(input), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name:'PBKDF2', salt, iterations, hash:'SHA-256' }, baseKey, { name:'AES-GCM', length:256 }, false, ['encrypt','decrypt']);
+}
+async function aesGcmEncrypt(key, plainBuf, iv){
+  const plain = (typeof plainBuf === 'string') ? new TextEncoder().encode(plainBuf) : new Uint8Array(plainBuf);
+  return crypto.subtle.encrypt({ name:'AES-GCM', iv }, key, plain);
+}
+async function aesGcmDecrypt(key, iv, ctBuf){
+  try{
+    const pt = await crypto.subtle.decrypt({ name:'AES-GCM', iv }, key, ctBuf);
+    return pt;
+  }catch(e){
+    throw new Error('Decryption failed (wrong passphrase or tampered blob).');
+  }
+}
+
+/* time helpers */
+function istToUTCISO(dateStr,timeStr){ if(!dateStr||!timeStr) return null; const isoWithOffset = `${dateStr}T${timeStr}:00+05:30`; return new Date(isoWithOffset).toISOString(); }
+function fmtNoTZ(isoStr){ const d=new Date(isoStr); const Y=d.getFullYear(), M=String(d.getMonth()+1).padStart(2,'0'), D=String(d.getDate()).padStart(2,'0'); const h=String(d.getHours()).padStart(2,'0'), m=String(d.getMinutes()).padStart(2,'0'), s=String(d.getSeconds()).padStart(2,'0'); return `${Y}-${M}-${D} ${h}:${m}:${s}`; }
+
+/* LOCK flow */
+document.getElementById('doLock').addEventListener('click', async ()=>{
+  const modeIsFile = modeFileBtn.classList.contains('active');
+  const secretText = document.getElementById('secret').value || '';
+  const fileInput = document.getElementById('fileInputLock');
+  const date = document.getElementById('date').value || '';
+  const time = document.getElementById('time').value || '';
+  const pass = document.getElementById('passLock').value || '';
+  const outEl = document.getElementById('lockStatus');
+  outEl.style.display='block'; outEl.textContent='';
+
+  if(!date || !time){ alert('Choose unlock date & time (IST).'); return; }
+  if(modeIsFile && (!fileInput.files || !fileInput.files[0])){ alert('Please choose a file to encrypt.'); return; }
+  if(!modeIsFile && !secretText){ alert('Please paste secret text or choose File mode.'); return; }
+  if(!pass){ if(!confirm('No passphrase entered — this will encrypt with an empty passphrase. Continue?')) return; }
+
+  try{
+    outEl.textContent = 'Preparing envelope...';
+    const unlockAtUTC = istToUTCISO(date,time);
+    if(!unlockAtUTC) throw new Error('Invalid IST date/time');
+
+    let payloadObj = null;
+    if(modeIsFile){
+      const f = fileInput.files[0];
+      const ab = await f.arrayBuffer();
+      const u8 = new Uint8Array(ab);
+      const hex = uint8ToHex(u8);
+      payloadObj = { isFile:true, filename:f.name, mime:f.type || 'application/octet-stream', dataHex: hex };
+    }else{
+      payloadObj = { isFile:false, dataText: secretText };
+    }
+
+    const envelope = { version:1, createdAt:new Date().toISOString(), unlockAtUTC:unlockAtUTC, timeApiUrl:WORLD_TIME_API, pageHashHex:UNLOCK_PAGE_HASH, payload: payloadObj };
+    const plainStr = JSON.stringify(envelope);
+
+    outEl.textContent = 'Deriving key and encrypting (this may take a few seconds)...';
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await deriveKey(pass, UNLOCK_PAGE_HASH, salt, KDF_ITERS);
+    const ctBuf = await aesGcmEncrypt(key, plainStr, iv);
+
+    const combined = concatUint8Arrays(salt, iv, new Uint8Array(ctBuf));
+    const hexOut = uint8ToHex(combined);
+    const outJson = { data: hexOut };
+    const fileDate = date;
+    const fileTimeSafe = time.replace(':','-');
+    const fname = `timed_enc_${fileDate}_${fileTimeSafe}.json`;
+
+    const blob = new Blob([JSON.stringify(outJson)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = fname;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    outEl.innerHTML = `<strong>Encrypted and downloaded:</strong> ${escapeHtml(fname)}\nKeep passphrase separate from this file for self-lock.`;
+  }catch(e){
+    console.error(e);
+    outEl.innerHTML = `<span style="color:${'#c33'}">Error: ${escapeHtml(e.message)}</span>`;
+  }
+});
+
+/* UNLOCK flow */
+document.getElementById('doUnlock').addEventListener('click', async ()=>{
+  const f = document.getElementById('encFile').files[0];
+  const pass = document.getElementById('passUnlock').value || '';
+  const outEl = document.getElementById('unlockStatus');
+  outEl.style.display='block'; outEl.textContent='';
+  if(!f){ alert('Select the encrypted JSON file.'); return; }
+
+  try{
+    outEl.textContent = 'Reading file...';
+    const txt = await f.text();
+    const parsed = JSON.parse(txt);
+    if(!parsed || !parsed.data) throw new Error('Invalid file: missing data field.');
+
+    const combined = hexToUint8(parsed.data);
+    if(combined.length < 28) throw new Error('Invalid data length.');
+
+    const salt = combined.slice(0,16);
+    const iv = combined.slice(16,28);
+    const ct = combined.slice(28);
+
+    outEl.textContent = 'Deriving key...';
+    const key = await deriveKey(pass, UNLOCK_PAGE_HASH, salt, KDF_ITERS);
+
+    outEl.textContent = 'Attempting decryption...';
+    (async ()=>{
+      try{
+        const ptBuf = await aesGcmDecrypt(key, iv, ct);
+        const plainStr = new TextDecoder().decode(ptBuf);
+        const envelope = JSON.parse(plainStr);
+
+        if(!envelope.pageHashHex) throw new Error('Decrypted envelope missing pageHashHex.');
+        if(envelope.pageHashHex !== UNLOCK_PAGE_HASH) throw new Error('Page-hash mismatch: encrypted blob bound to different unlock page.');
+
+        outEl.textContent = 'Decryption OK. Fetching server time...';
+        const r = await fetch(envelope.timeApiUrl, {cache:'no-store'});
+        if(!r.ok) throw new Error('Time API fetch error: ' + r.status);
+        const j = await r.json();
+        let dtStr = j.datetime || j.utc_datetime || j.currentDateTime || null;
+        if(!dtStr){
+          for(const k in j){ if(typeof j[k]==='string' && /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(j[k])){ dtStr = j[k]; break; } }
+        }
+        if(!dtStr) throw new Error('Could not parse datetime from time API response.');
+
+        const serverNow = new Date(dtStr);
+        const serverNowFmt = fmtNoTZ(serverNow.toISOString());
+
+        let unlockISTFormatted;
+        try{
+          const parts = new Intl.DateTimeFormat('en-GB', { timeZone:'Asia/Kolkata', year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false }).formatToParts(new Date(envelope.unlockAtUTC));
+          const map={}; for(const p of parts) map[p.type]=p.value;
+          unlockISTFormatted = `${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}:${map.second}`;
+        }catch(_){
+          const d = new Date(envelope.unlockAtUTC); d.setMinutes(d.getMinutes()+330);
+          unlockISTFormatted = fmtNoTZ(d.toISOString());
+        }
+
+        const allowed = serverNow >= new Date(envelope.unlockAtUTC);
+
+        if(allowed){
+          const srvParts = serverNowFmt.split(' ');
+          const srvDate = srvParts[0], srvTime = srvParts[1];
+          const unlockParts = unlockISTFormatted.split(' ');
+          const uDate = unlockParts[0], uTime = unlockParts[1];
+
+          if(envelope.payload && envelope.payload.isFile){
+            const payload = envelope.payload;
+            const fileBytes = hexToUint8(payload.dataHex);
+            const blob = new Blob([fileBytes], { type: payload.mime || 'application/octet-stream' });
+            const fileName = payload.filename || 'decrypted_file';
+            const dlLink = document.createElement('a');
+            dlLink.href = URL.createObjectURL(blob);
+            dlLink.download = fileName;
+            outEl.innerHTML =
+              `<div><strong>Unlock allowed ✅ — IST</strong></div>\n\n` +
+              `Server date: ${escapeHtml(srvDate)}; time: ${escapeHtml(srvTime)}\n` +
+              `Unlock date: ${escapeHtml(uDate)}; time: ${escapeHtml(uTime)}\n\n` +
+              `<strong>Decrypted file:</strong> ${escapeHtml(fileName)}\n\n` +
+              `Download should start automatically.`;
+            document.body.appendChild(dlLink); dlLink.click(); dlLink.remove();
+          } else {
+            const text = envelope.payload && envelope.payload.dataText ? envelope.payload.dataText : '';
+            outEl.innerHTML =
+              `<div><strong>Unlock allowed ✅ — IST</strong></div>\n\n` +
+              `Server date: ${escapeHtml(srvDate)}; time: ${escapeHtml(srvTime)}\n` +
+              `Unlock date: ${escapeHtml(uDate)}; time: ${escapeHtml(uTime)}\n\n` +
+              `<strong>Decrypted payload:</strong>\n<pre>${escapeHtml(text)}</pre>`;
+          }
+        }else{
+          const diffMs = new Date(envelope.unlockAtUTC) - serverNow;
+          let s = Math.floor(diffMs/1000);
+          const days = Math.floor(s/86400); s%=86400;
+          const hrs = Math.floor(s/3600); s%=3600;
+          const mins = Math.floor(s/60); const secs = s%60;
+          const serverFmt = fmtNoTZ(serverNow.toISOString());
+          outEl.innerHTML =
+            `<div style="color:${'#c66'}">🔒 Not yet time to unlock.</div>\n\n` +
+            `Server date: ${escapeHtml(serverFmt.split(' ')[0])}; time: ${escapeHtml(serverFmt.split(' ')[1])}\n` +
+            `Unlock date: ${escapeHtml(unlockISTFormatted.split(' ')[0])}; time: ${escapeHtml(unlockISTFormatted.split(' ')[1])}\n\n` +
+            `Time remaining: ${days}d ${hrs}h ${mins}m ${secs}s`;
+        }
+      }catch(err){
+        console.error(err);
+        outEl.innerHTML = `<div style="color:${'#c33'}">Error: ${escapeHtml(err.message)}</div>`;
+      }
+    })();
+  }catch(e){
+    console.error(e);
+    outEl.innerHTML = `<div style="color:${'#c33'}">Error: ${escapeHtml(e.message)}</div>`;
+  }
+});
+</script>
+
+</body>
+</html>
